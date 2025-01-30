@@ -1,4 +1,4 @@
-const util = require('util')
+const util = require('node:util')
 const Edge = require('../lib/edge.js')
 const OverrideSet = require('../lib/override-set.js')
 const t = require('tap')
@@ -71,6 +71,7 @@ const a = {
   },
   isTop: false,
   parent: top,
+  root: top,
   resolve (n) {
     return n === 'aa' ? aa : this.parent.resolve(n)
   },
@@ -225,6 +226,16 @@ t.ok(new Edge({
   spec: '1.x',
   accept: '2.x',
 }).satisfiedBy(c), 'c@2 satisfies spec:1.x, accept:2.x')
+reset(a)
+
+t.equal(
+  (new Edge({
+    from: a,
+    type: 'prod',
+    name: 'c',
+    spec: '1.x',
+    accept: '2.x',
+  })).accept, '2.x', '.accept getter works')
 reset(a)
 
 t.ok(new Edge({
@@ -808,3 +819,256 @@ t.same(bundledEdge.explain(), {
   bundled: true,
   from: bundleParent.explain(),
 }, 'bundled edge.explain as expected')
+
+t.test('override references find the correct root', (t) => {
+  const overrides = new OverrideSet({
+    overrides: {
+      foo: '$foo',
+    },
+  })
+
+  const root = {
+    name: 'root',
+    packageName: 'root',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'root node explanation',
+    package: {
+      name: 'root',
+      version: '1.2.3',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+      overrides: {
+        foo: '$foo',
+      },
+    },
+    get version () {
+      return this.package.version
+    },
+    isTop: true,
+    parent: null,
+    overrides,
+    resolve (n) {
+      return n === 'foo' ? foo : null
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+
+  const foo = {
+    name: 'foo',
+    packageName: 'foo',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'foo node explanation',
+    package: {
+      name: 'foo',
+      version: '1.2.3',
+      dependencies: {},
+    },
+    get version () {
+      return this.package.version
+    },
+    parent: root,
+    root: root,
+    resolve (n) {
+      return n === 'bar' ? bar : this.parent.resolve(n)
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+  foo.overrides = overrides.getNodeRule(foo)
+
+  const bar = {
+    name: 'bar',
+    packageName: 'bar',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'bar node explanation',
+    package: {
+      name: 'bar',
+      version: '1.2.3',
+      dependencies: {
+        foo: '^2.0.0',
+      },
+    },
+    get version () {
+      return this.package.version
+    },
+    parent: foo,
+    root: root,
+    resolve (n) {
+      return this.parent.resolve(n)
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+  bar.overrides = foo.overrides.getNodeRule(bar)
+
+  const virtualBar = {
+    name: 'bar',
+    packageName: 'bar',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'bar node explanation',
+    package: {
+      name: 'bar',
+      version: '1.2.3',
+      dependencies: {
+        foo: '^2.0.0',
+      },
+    },
+    parent: null,
+    root: null,
+    sourceReference: bar,
+    get version () {
+      return this.package.version
+    },
+    resolve (n) {
+      return bar.resolve(n)
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+  virtualBar.overrides = overrides
+
+  const edge = new Edge({
+    from: virtualBar,
+    type: 'prod',
+    spec: '^2.0.0',
+    name: 'foo',
+    overrides: overrides.getEdgeRule({ name: 'foo', spec: '^2.0.0' }),
+  })
+
+  t.ok(edge.valid, 'edge is valid')
+  t.end()
+})
+
+t.test('shrinkwrapped and bundled deps are not overridden and remain valid', (t) => {
+  const overrides = new OverrideSet({
+    overrides: {
+      bar: '^2.0.0',
+    },
+  })
+
+  const root = {
+    name: 'root',
+    packageName: 'root',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'root node explanation',
+    package: {
+      name: 'root',
+      version: '1.2.3',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+      overrides: {
+        bar: '^2.0.0',
+      },
+    },
+    get version () {
+      return this.package.version
+    },
+    isTop: true,
+    parent: null,
+    overrides,
+    resolve (n) {
+      return n === 'foo' ? foo : null
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+
+  const foo = {
+    name: 'foo',
+    packageName: 'foo',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'foo node explanation',
+    hasShrinkwrap: true,
+    package: {
+      name: 'foo',
+      version: '1.2.3',
+      dependencies: {
+        bar: '^1.0.0',
+      },
+    },
+    get version () {
+      return this.package.version
+    },
+    parent: root,
+    root,
+    resolve (n) {
+      return n === 'bar' ? bar : this.parent.resolve(n)
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+  foo.overrides = overrides.getNodeRule(foo)
+
+  const bar = {
+    name: 'bar',
+    packageName: 'bar',
+    edgesOut: new Map(),
+    edgesIn: new Set(),
+    explain: () => 'bar node explanation',
+    inShrinkwrap: true,
+    package: {
+      name: 'bar',
+      version: '1.2.3',
+      dependencies: {},
+    },
+    get version () {
+      return this.package.version
+    },
+    parent: foo,
+    root,
+    resolve (n) {
+      return this.parent.resolve(n)
+    },
+    addEdgeOut (edge) {
+      this.edgesOut.set(edge.name, edge)
+    },
+    addEdgeIn (edge) {
+      this.edgesIn.add(edge)
+    },
+  }
+  bar.overrides = foo.overrides.getNodeRule(bar)
+
+  const edge = new Edge({
+    from: foo,
+    type: 'prod',
+    spec: '^1.0.0',
+    name: 'bar',
+    overrides: overrides.getEdgeRule({ name: 'bar', spec: '^1.0.0' }),
+  })
+
+  t.ok(edge.valid, 'edge is valid')
+  t.end()
+})
